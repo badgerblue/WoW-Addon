@@ -1,0 +1,8 @@
+## Interface: 120001
+## Title: Dwaldos
+## Notes: Dwaldos party sounds, alerts, and questionable decisions
+## Author: You
+## Version: 1.0.0
+## SavedVariables: DwaldosDB
+
+Dwaldos.lua
