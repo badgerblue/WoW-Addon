@@ -13,6 +13,7 @@ local defaults = {
 
     -- Change these to the actual character names.
     donaldName = "Donald",
+    wintonName = "Winton",
 
     dwaldo1 = "Vynaraz",
     dwaldo2 = "Robs",
@@ -51,20 +52,16 @@ end
 -- Sound Files
 ------------------------------------------------------------
 
-local SOUND_WINTON =
-    "Interface\\AddOns\\Dwaldos\\Sounds\\winton.ogg"
+local function AddonFile(relativePath)
+    return "Interface\\AddOns\\" .. ADDON_NAME .. "\\" .. relativePath
+end
 
-local SOUND_73 =
-    "Interface\\AddOns\\Dwaldos\\Sounds\\73_laugh.ogg"
-
-local SOUND_WHAAAAT =
-    "Interface\\AddOns\\Dwaldos\\Sounds\\whaaaat.ogg"
-
-local SOUND_GANGS =
-    "Interface\\AddOns\\Dwaldos\\Sounds\\gangs_all_here.ogg"
-
-local SOUND_SLOT =
-    "Interface\\AddOns\\Dwaldos\\Sounds\\slot_machine.ogg"
+local SOUND_WINTON = AddonFile("Sounds\\winton.ogg")
+local SOUND_73 = AddonFile("Sounds\\73_laugh.ogg")
+local SOUND_WHAAAAT = AddonFile("Sounds\\whaaaat.ogg")
+local SOUND_GANGS = AddonFile("Sounds\\gangs_all_here.ogg")
+local SOUND_SLOT = AddonFile("Sounds\\slot_machine.ogg")
+local TEXTURE_SAL = AddonFile("sal.tga")
 
 ------------------------------------------------------------
 -- Sound Helper
@@ -78,6 +75,19 @@ local function PlayDwaldosSound(soundFile)
     PlaySoundFile(soundFile, "Master")
 end
 
+local function ShowRaidNotice(text)
+    if RaidNotice_AddMessage and RaidWarningFrame then
+        local color = ChatTypeInfo and ChatTypeInfo["RAID_WARNING"]
+
+        pcall(
+            RaidNotice_AddMessage,
+            RaidWarningFrame,
+            text,
+            color
+        )
+    end
+end
+
 ------------------------------------------------------------
 -- Name Helpers
 ------------------------------------------------------------
@@ -87,7 +97,11 @@ local function ShortName(name)
         return nil
     end
 
-    return Ambiguate(name, "none")
+    if Ambiguate then
+        return Ambiguate(name, "none")
+    end
+
+    return strmatch(name, "^([^-]+)") or name
 end
 
 local function NameMatches(name, targetName)
@@ -97,7 +111,7 @@ local function NameMatches(name, targetName)
 
     name = ShortName(name)
 
-    return name:lower() == targetName:lower()
+    return strlower(name) == strlower(targetName)
 end
 
 ------------------------------------------------------------
@@ -208,7 +222,7 @@ end
 ------------------------------------------------------------
 
 local function CheckDonald(previous, current)
-    if not db.donaldName or db.donaldName == "" then
+    if not db or not db.donaldName or db.donaldName == "" then
         return
     end
 
@@ -228,12 +242,40 @@ local function CheckDonald(previous, current)
 end
 
 ------------------------------------------------------------
+-- Winton Detection
+------------------------------------------------------------
+
+local function CheckWinton(previous, current)
+    if not db or not db.wintonName or db.wintonName == "" then
+        return
+    end
+
+    local wasInGroup =
+        GroupContains(previous, db.wintonName)
+
+    local isInGroup =
+        GroupContains(current, db.wintonName)
+
+    if isInGroup and not wasInGroup then
+        PlayDwaldosSound(SOUND_WINTON)
+
+        print(
+            "|cff00ccffDwaldos:|r Winton has arrived."
+        )
+    end
+end
+
+------------------------------------------------------------
 -- The Three Dwaldos
 ------------------------------------------------------------
 
 local dwaldosAnnouncementActive = false
 
 local function CheckAllDwaldos()
+    if not db then
+        return
+    end
+
     if not IsInGroup() then
         dwaldosAnnouncementActive = false
         return
@@ -256,11 +298,7 @@ local function CheckAllDwaldos()
 
         PlayDwaldosSound(SOUND_GANGS)
 
-        RaidNotice_AddMessage(
-            RaidWarningFrame,
-            "GANGS ALL HERE!",
-            ChatTypeInfo["RAID_WARNING"]
-        )
+        ShowRaidNotice("GANGS ALL HERE!")
 
         print(
             "|cff00ff00Dwaldos:|r GANGS ALL HERE!"
@@ -313,13 +351,31 @@ end
 local lastLootMethod = nil
 
 local function GetCurrentLootMethod()
-    local method = GetLootMethod()
+    if C_PartyInfo and C_PartyInfo.GetLootMethod then
+        local method = C_PartyInfo.GetLootMethod()
 
-    if method == "master" then
-        return "master"
+        if Enum and Enum.LootMethod and method == Enum.LootMethod.Masterlooter then
+            return "master"
+        end
+
+        if method == 2 then
+            return "master"
+        end
+
+        return method
     end
 
-    return method
+    if GetLootMethod then
+        local method = GetLootMethod()
+
+        if method == "master" then
+            return "master"
+        end
+
+        return method
+    end
+
+    return nil
 end
 
 local function CheckLootMethod()
@@ -331,11 +387,7 @@ local function CheckLootMethod()
 
     if method ~= lastLootMethod then
         if method == "master" then
-            RaidNotice_AddMessage(
-                RaidWarningFrame,
-                "SNAGGED YOUR LOOT!",
-                ChatTypeInfo["RAID_WARNING"]
-            )
+            ShowRaidNotice("SNAGGED YOUR LOOT!")
 
             print(
                 "|cffff8000Dwaldos:|r SNAGGED YOUR LOOT!"
@@ -351,7 +403,7 @@ end
 ------------------------------------------------------------
 
 local function DoDailyReminder()
-    if not db.dailyReminder then
+    if not db or not db.dailyReminder then
         return
     end
 
@@ -378,61 +430,104 @@ end
 -- Sal Player Portrait
 ------------------------------------------------------------
 
+local PORTRAIT_MASK =
+    "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+
+local function GetPlayerPortraitTexture()
+    if PlayerFrame
+        and PlayerFrame.PlayerFrameContainer
+        and PlayerFrame.PlayerFrameContainer.PlayerPortrait then
+
+        return PlayerFrame.PlayerFrameContainer.PlayerPortrait,
+            PlayerFrame.PlayerFrameContainer
+    end
+
+    if PlayerFrame and PlayerFrame.portrait then
+        return PlayerFrame.portrait, PlayerFrame
+    end
+
+    if PlayerPortrait then
+        return PlayerPortrait, PlayerPortrait:GetParent()
+    end
+end
+
+local function SetDefaultPortraitHidden(hidden)
+    local portrait = GetPlayerPortraitTexture()
+
+    if not portrait then
+        return
+    end
+
+    if hidden then
+        portrait:SetAlpha(0)
+    else
+        portrait:SetAlpha(1)
+    end
+end
+
 local function CreateSalPortrait()
-    if not db.salPortrait then
+    if not db then
         return
     end
 
-    if not PlayerFrame then
+    local portrait, container = GetPlayerPortraitTexture()
+
+    if not portrait or not container then
         return
     end
 
-    if PlayerFrame.DwaldosSalPortrait then
-        return
+    local texture = container.DwaldosSalPortrait
+
+    if not texture then
+        -- Draw under FrameTexture so the unit-frame chrome sits on top
+        -- of Sal, same as the default character portrait.
+        texture = container:CreateTexture(
+            nil,
+            "BACKGROUND",
+            nil,
+            -1
+        )
+
+        texture:SetAllPoints(portrait)
+        texture:SetTexture(TEXTURE_SAL)
+
+        local mask = container:CreateMaskTexture()
+        mask:SetAllPoints(portrait)
+        mask:SetTexture(
+            PORTRAIT_MASK,
+            "CLAMPTOBLACKADDITIVE",
+            "CLAMPTOBLACKADDITIVE"
+        )
+        texture:AddMaskTexture(mask)
+
+        container.DwaldosSalPortrait = texture
+        texture.mask = mask
+    else
+        texture:ClearAllPoints()
+        texture:SetAllPoints(portrait)
     end
 
-    --------------------------------------------------------
-    -- Container
-    --------------------------------------------------------
+    if db.salPortrait then
+        texture:Show()
+        SetDefaultPortraitHidden(true)
+    else
+        texture:Hide()
+        SetDefaultPortraitHidden(false)
+    end
+end
 
-    local frame = CreateFrame(
-        "Frame",
-        nil,
-        PlayerFrame
-    )
+if hooksecurefunc then
+    hooksecurefunc("SetPortraitTexture", function(texture)
+        if not db or not db.salPortrait then
+            return
+        end
 
-    frame:SetSize(56, 56)
+        local portrait = GetPlayerPortraitTexture()
 
-    frame:SetPoint(
-        "CENTER",
-        PlayerFrame,
-        "LEFT",
-        45,
-        0
-    )
-
-    --------------------------------------------------------
-    -- Sal Texture
-    --------------------------------------------------------
-
-    local texture = frame:CreateTexture(
-        nil,
-        "ARTWORK"
-    )
-
-    texture:SetAllPoints()
-
-    texture:SetTexture(
-        "Interface\\AddOns\\Dwaldos\\sal.tga"
-    )
-
-    --------------------------------------------------------
-    -- Store References
-    --------------------------------------------------------
-
-    frame.texture = texture
-
-    PlayerFrame.DwaldosSalPortrait = frame
+        if texture == portrait then
+            texture:SetAlpha(0)
+        end
+    end)
 end
 
 ------------------------------------------------------------
@@ -443,6 +538,10 @@ SLASH_DWALDOS1 = "/dwaldos"
 SLASH_DWALDOS2 = "/dw"
 
 SlashCmdList["DWALDOS"] = function(message)
+    if not db then
+        InitializeDB()
+    end
+
     message = message or ""
 
     local command, value =
@@ -491,6 +590,26 @@ SlashCmdList["DWALDOS"] = function(message)
 
             print(
                 "Dwaldos: Donald set to "
+                .. value
+            )
+        end
+
+    --------------------------------------------------------
+    -- Winton
+    --------------------------------------------------------
+
+    elseif command == "winton" then
+
+        if value == "" then
+            print(
+                "Winton is currently set to: "
+                .. tostring(db.wintonName)
+            )
+        else
+            db.wintonName = value
+
+            print(
+                "Dwaldos: Winton set to "
                 .. value
             )
         end
@@ -633,9 +752,7 @@ SlashCmdList["DWALDOS"] = function(message)
         elseif setting == "off" then
             db.salPortrait = false
 
-            if PlayerFrame.DwaldosSalPortrait then
-                PlayerFrame.DwaldosSalPortrait:Hide()
-            end
+            CreateSalPortrait()
 
             print(
                 "Dwaldos: Sal portrait disabled."
@@ -771,6 +888,10 @@ SlashCmdList["DWALDOS"] = function(message)
         )
 
         print(
+            "/dw winton NAME"
+        )
+
+        print(
             "/dw dwaldo1 NAME"
         )
 
@@ -830,28 +951,52 @@ end
 
 local eventFrame = CreateFrame("Frame")
 
-eventFrame:RegisterEvent("PLAYER_LOGIN")
-eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
-eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
-eventFrame:RegisterEvent("PLAYER_DEAD")
-eventFrame:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
-eventFrame:RegisterEvent("GROUP_LOOT_RULES_CHANGED")
+local function RegisterGameEvent(eventName)
+    local ok = pcall(eventFrame.RegisterEvent, eventFrame, eventName)
+
+    return ok
+end
+
+RegisterGameEvent("ADDON_LOADED")
+RegisterGameEvent("PLAYER_LOGIN")
+RegisterGameEvent("PLAYER_ENTERING_WORLD")
+RegisterGameEvent("GROUP_ROSTER_UPDATE")
+RegisterGameEvent("CHAT_MSG_SYSTEM")
+RegisterGameEvent("PLAYER_DEAD")
+RegisterGameEvent("PARTY_LOOT_METHOD_CHANGED")
 
 eventFrame:SetScript(
     "OnEvent",
     function(self, event, ...)
 
         ----------------------------------------------------
+        -- Addon loaded
+        ----------------------------------------------------
+
+        if event == "ADDON_LOADED" then
+
+            local loadedName = ...
+
+            if loadedName == ADDON_NAME then
+                InitializeDB()
+            end
+
+        ----------------------------------------------------
         -- Login
         ----------------------------------------------------
 
-        if event == "PLAYER_LOGIN" then
+        elseif event == "PLAYER_LOGIN" then
 
-            InitializeDB()
+            if not db then
+                InitializeDB()
+            end
 
             previousGroup =
                 GetGroupMembers()
+
+            print(
+                "|cff00ccffDwaldos|r loaded. Type |cffffff00/dw|r for commands."
+            )
 
             C_Timer.After(
                 3,
@@ -872,6 +1017,10 @@ eventFrame:SetScript(
 
         elseif event == "PLAYER_ENTERING_WORLD" then
 
+            if not db then
+                InitializeDB()
+            end
+
             C_Timer.After(
                 5,
                 function()
@@ -879,6 +1028,8 @@ eventFrame:SetScript(
                     DoDailyReminder()
 
                     CheckAllDwaldos()
+
+                    CreateSalPortrait()
 
                 end
             )
@@ -888,6 +1039,10 @@ eventFrame:SetScript(
         ----------------------------------------------------
 
         elseif event == "GROUP_ROSTER_UPDATE" then
+
+            if not db then
+                return
+            end
 
             local currentGroup =
                 GetGroupMembers()
@@ -938,8 +1093,7 @@ eventFrame:SetScript(
         -- Loot method changed
         ----------------------------------------------------
 
-        elseif event == "PARTY_LOOT_METHOD_CHANGED"
-            or event == "GROUP_LOOT_RULES_CHANGED" then
+        elseif event == "PARTY_LOOT_METHOD_CHANGED" then
 
             C_Timer.After(
                 0.1,
@@ -948,20 +1102,5 @@ eventFrame:SetScript(
                 end
             )
         end
-    end
-)
-
-------------------------------------------------------------
--- Delayed portrait creation
-------------------------------------------------------------
-
-C_Timer.After(
-    5,
-    function()
-
-        if db then
-            CreateSalPortrait()
-        end
-
     end
 )
